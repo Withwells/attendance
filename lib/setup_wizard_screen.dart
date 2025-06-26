@@ -3,13 +3,11 @@ import 'google_sheets_service.dart';
 
 class SetupWizardScreen extends StatefulWidget {
   final GoogleSheetsService sheetsService;
-  final String spreadsheetId; // will be empty on first setup
   final String adminEmail;
 
   const SetupWizardScreen({
     super.key,
     required this.sheetsService,
-    required this.spreadsheetId,
     required this.adminEmail,
   });
 
@@ -18,62 +16,68 @@ class SetupWizardScreen extends StatefulWidget {
 }
 
 class _SetupWizardScreenState extends State<SetupWizardScreen> {
-  final _businessNameController = TextEditingController();
+  final _businessNameC = TextEditingController();
+  final _adminNameC    = TextEditingController();
+  late final TextEditingController _adminEmailC;
 
-  bool requirePhoto = false;
-  bool requireLocation = false;
-  bool enableTaskEntry = false;
+  bool _requirePhoto    = false;
+  bool _requireLocation = false;
+  bool _enableTaskEntry = false;
 
-  bool _isLoading = false;
+  bool   _isLoading = false;
   String? _error;
 
   @override
+  void initState() {
+    super.initState();
+    _adminEmailC = TextEditingController(text: widget.adminEmail);
+  }
+
+  @override
   void dispose() {
-    _businessNameController.dispose();
+    _businessNameC.dispose();
+    _adminNameC.dispose();
+    _adminEmailC.dispose();
     super.dispose();
   }
 
   Future<void> _finishSetup() async {
-    final businessName = _businessNameController.text.trim();
+    final biz   = _businessNameC.text.trim();
+    final admin = _adminNameC.text.trim();
+    final email = _adminEmailC.text.trim();
 
-    if (businessName.isEmpty) {
-      setState(() {
-        _error = 'Please enter a business name';
-      });
+    if (biz.isEmpty || admin.isEmpty || email.isEmpty) {
+      setState(() => _error = 'Please fill all fields');
       return;
     }
 
-    setState(() {
-      _isLoading = true;
-      _error = null;
-    });
+    setState(() { _isLoading = true; _error = null; });
 
     try {
-      // If spreadsheetId empty, create sheet now
-      final spreadsheetId = widget.spreadsheetId.isEmpty
-          ? await widget.sheetsService.createAttendanceSheet(businessName)
-          : widget.spreadsheetId;
+      final ids = await widget.sheetsService.createFolderAndSheet(
+        biz, admin,
+      );
 
-      // Initialize sheet with admin and config
       await widget.sheetsService.initializeSheet(
-        spreadsheetId,
-        [], // employees empty initially, add later
-        widget.adminEmail,
+        ids['spreadsheetId']!,
+        email,
+        admin,
         {
-          'requirePhoto': requirePhoto,
-          'requireLocation': requireLocation,
-          'enableTaskEntry': enableTaskEntry,
+          'requirePhoto'    : _requirePhoto,
+          'requireLocation' : _requireLocation,
+          'enableTaskEntry' : _enableTaskEntry,
         },
       );
 
-      // Return spreadsheetId and businessName to HomeScreen
-      Navigator.pop(context, {
-        'spreadsheetId': spreadsheetId,
-        'businessName': businessName,
-      });
+      if (context.mounted) {
+        Navigator.pop(context, {
+          'spreadsheetId': ids['spreadsheetId'],
+          'businessName' : biz,
+        });
+      }
     } catch (e) {
       setState(() {
-        _error = 'Error during setup: $e';
+        _error     = 'Setup error: $e';
         _isLoading = false;
       });
     }
@@ -88,28 +92,46 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
         child: Column(
           children: [
             TextField(
-              controller: _businessNameController,
+              controller: _businessNameC,
               decoration: const InputDecoration(
                 labelText: 'Business Name',
                 border: OutlineInputBorder(),
               ),
               enabled: !_isLoading,
             ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _adminNameC,
+              decoration: const InputDecoration(
+                labelText: 'Admin Name',
+                border: OutlineInputBorder(),
+              ),
+              enabled: !_isLoading,
+            ),
+            const SizedBox(height: 16),
+            TextField(
+              controller: _adminEmailC,
+              decoration: const InputDecoration(
+                labelText: 'Admin Email',
+                border: OutlineInputBorder(),
+              ),
+              enabled: !_isLoading,
+            ),
             const SizedBox(height: 20),
             SwitchListTile(
-              title: const Text('Require Photo for Attendance'),
-              value: requirePhoto,
-              onChanged: _isLoading ? null : (val) => setState(() => requirePhoto = val),
+              title: const Text('Require Photo'),
+              value: _requirePhoto,
+              onChanged: _isLoading ? null : (v) => setState(() => _requirePhoto = v),
             ),
             SwitchListTile(
-              title: const Text('Require Location for Attendance'),
-              value: requireLocation,
-              onChanged: _isLoading ? null : (val) => setState(() => requireLocation = val),
+              title: const Text('Require Location'),
+              value: _requireLocation,
+              onChanged: _isLoading ? null : (v) => setState(() => _requireLocation = v),
             ),
             SwitchListTile(
               title: const Text('Enable Task Entry'),
-              value: enableTaskEntry,
-              onChanged: _isLoading ? null : (val) => setState(() => enableTaskEntry = val),
+              value: _enableTaskEntry,
+              onChanged: _isLoading ? null : (v) => setState(() => _enableTaskEntry = v),
             ),
             const SizedBox(height: 24),
             if (_error != null) ...[
@@ -120,8 +142,7 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
               onPressed: _isLoading ? null : _finishSetup,
               child: _isLoading
                   ? const SizedBox(
-                width: 24,
-                height: 24,
+                width: 24, height: 24,
                 child: CircularProgressIndicator(strokeWidth: 2),
               )
                   : const Text('Finish Setup'),

@@ -1,6 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_sign_in/google_sign_in.dart';
-import 'package:shared_preferences/shared_preferences.dart'; // Add shared_preferences in pubspec.yaml
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'google_sheets_service.dart';
 import 'setup_wizard_screen.dart';
@@ -22,152 +22,160 @@ class _HomeScreenState extends State<HomeScreen> {
     ],
   );
 
-  bool _isSigningIn = false;
-  String _status = 'Not signed in';
-
+  bool   _busy   = false;
+  String _status = '';
   String? _spreadsheetId;
   String? _businessName;
 
   @override
   void initState() {
     super.initState();
-    _loadSetupData();
+    _loadPrefs();
   }
 
-  Future<void> _loadSetupData() async {
+  Future<void> _loadPrefs() async {
     final prefs = await SharedPreferences.getInstance();
     setState(() {
       _spreadsheetId = prefs.getString('spreadsheetId');
-      _businessName = prefs.getString('businessName');
+      _businessName  = prefs.getString('businessName');
     });
   }
 
-  Future<void> _startSetup() async {
-    if (_spreadsheetId != null) {
-      // Setup already done
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Business already set up.')),
-      );
-      return;
-    }
-
-    // Start Google Sign-In inside setup wizard flow
-    setState(() => _isSigningIn = true);
+  /* ─────────── Sign-In ─────────── */
+  Future<void> _handleSignIn() async {
+    if (_busy) return;
+    setState(() => _busy = true);
 
     try {
       final user = await _googleSignIn.signIn();
-      if (user == null) {
-        setState(() {
-          _status = 'Sign-in cancelled';
-          _isSigningIn = false;
-        });
-        return;
-      }
+      if (user == null) { _reset('Sign-in cancelled'); return; }
 
-      final sheetsService = await GoogleSheetsService.fromGoogleSignIn(user);
+      final svc   = await GoogleSheetsService.fromGoogleSignIn(user);
+      final found = await svc.findExistingAttendanceFolder();
 
-      // Go to SetupWizardScreen, no spreadsheetId yet (setup will create)
-      final result = await Navigator.push<Map<String, dynamic>>(
+      if (found == null) { _reset('No business found. Run setup first.'); return; }
+
+      _spreadsheetId = found['spreadsheetId'];
+      _businessName  = found['businessName'];
+
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString('spreadsheetId', _spreadsheetId!);
+      await prefs.setString('businessName',  _businessName!);
+
+      if (!context.mounted) return;
+      Navigator.pushReplacement(
         context,
         MaterialPageRoute(
-          builder: (context) => SetupWizardScreen(
-            sheetsService: sheetsService,
-            spreadsheetId: '', // empty because setup creates new
+          builder: (_) => AdminDashboard(
+            sheetsService : svc,
+            spreadsheetId : _spreadsheetId!,
+          ),
+        ),
+      );
+    } catch (e) {
+      _reset('Error: $e');
+    }
+  }
+
+  /* ─────────── Setup ─────────── */
+  Future<void> _startSetup() async {
+    setState(() => _busy = true);
+
+    try {
+      final user = await _googleSignIn.signIn();
+      if (user == null) { _reset('Setup cancelled'); return; }
+
+      final svc = await GoogleSheetsService.fromGoogleSignIn(user);
+      final exists = await svc.findExistingAttendanceFolder();
+      if (exists != null) { _reset('Business already set up.'); return; }
+
+      if (!context.mounted) return;
+
+      final Map<String, dynamic>? result =
+      await Navigator.push<Map<String, dynamic>>(
+        context,
+        MaterialPageRoute(
+          builder: (_) => SetupWizardScreen(
+            sheetsService: svc,
             adminEmail: user.email,
           ),
         ),
       );
 
-      // SetupWizardScreen should return spreadsheetId and businessName on success
-      if (result != null && result['spreadsheetId'] != null && result['businessName'] != null) {
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('spreadsheetId', result['spreadsheetId']);
-        await prefs.setString('businessName', result['businessName']);
-
-        setState(() {
-          _spreadsheetId = result['spreadsheetId'];
-          _businessName = result['businessName'];
-          _status = 'Setup complete. Please sign in.';
-          _isSigningIn = false;
-        });
-      } else {
-        setState(() {
-          _status = 'Setup cancelled or failed.';
-          _isSigningIn = false;
-        });
-      }
-    } catch (e) {
       setState(() {
-        _status = 'Error during setup: $e';
-        _isSigningIn = false;
+        _status = '';
+        _busy   = false;
       });
-    }
-  }
 
-  Future<void> _handleSignIn() async {
-    if (_spreadsheetId == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please complete business setup first.')),
-      );
-      return;
-    }
-
-    setState(() => _isSigningIn = true);
-
-    try {
-      final user = await _googleSignIn.signIn();
-      if (user == null) {
-        setState(() {
-          _status = 'Sign-in cancelled';
-          _isSigningIn = false;
-        });
-        return;
-      }
-
-      final sheetsService = await GoogleSheetsService.fromGoogleSignIn(user);
-
-      // Proceed to admin dashboard directly
-      Navigator.pushReplacement(
-        context,
-        MaterialPageRoute(
-          builder: (context) => AdminDashboard(
-            sheetsService: sheetsService,
-            spreadsheetId: _spreadsheetId!,
+      if (result != null && result['spreadsheetId'] != null) {
+        // 🎉 Show success SnackBar with icon
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            duration: const Duration(seconds: 3),
+            content: Row(
+              children: const [
+                Icon(Icons.check_circle, color: Colors.white),
+                SizedBox(width: 8),
+                Expanded(
+                  child: Text('Setup complete! Redirecting to sign-in…'),
+                ),
+              ],
+            ),
           ),
-        ),
-      );
+        );
+
+        // ⏳ After 3 seconds, auto-trigger sign-in
+        Future.delayed(const Duration(seconds: 3), _handleSignIn);
+      }
     } catch (e) {
-      setState(() {
-        _status = 'Error signing in: $e';
-        _isSigningIn = false;
-      });
+      _reset('Setup error: $e');
     }
   }
 
+  /* ─────────── Logout ─────────── */
+  Future<void> _handleLogout() async {
+    await _googleSignIn.signOut();
+    setState(() {
+      _status        = '';
+      _businessName  = null;
+      _spreadsheetId = null;
+    });
+  }
+
+  /* ─────────── Helpers ─────────── */
+  void _reset(String msg) => setState(() { _status = msg; _busy = false; });
+
+  /* ─────────── UI ─────────── */
   @override
   Widget build(BuildContext context) {
-    final title = (_businessName == null || _businessName!.isEmpty)
-        ? 'Attendance App'
-        : '$_businessName - Attendance';
+    const appTitle = 'Business Attendance';
 
     return Scaffold(
-      appBar: AppBar(title: Text(title)),
+      appBar: AppBar(
+        title: const Text(appTitle),
+        actions: [
+          TextButton(
+            onPressed: _handleLogout,
+            child: const Text('Logout', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
       body: Center(
         child: Padding(
           padding: const EdgeInsets.all(24),
           child: Column(
             mainAxisSize: MainAxisSize.min,
             children: [
-              Text(_status),
+              if (_status.isNotEmpty) Text(_status),
               const SizedBox(height: 20),
               ElevatedButton(
-                onPressed: _isSigningIn ? null : _startSetup,
-                child: const Text('Setup Business'),
+                onPressed: _busy ? null : _handleSignIn,
+                child: const Text('Sign in with Google'),
               ),
               const SizedBox(height: 12),
-              ElevatedButton(
-                onPressed: _isSigningIn ? null : _handleSignIn,
-                child: const Text('Sign in with Google'),
+              TextButton(
+                onPressed: _busy ? null : _startSetup,
+                child: const Text('New business? Set up now'),
               ),
             ],
           ),
