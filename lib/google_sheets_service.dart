@@ -143,6 +143,7 @@ class GoogleSheetsService {
     return {
       'folderId'      : folderId,
       'spreadsheetId' : spreadsheetId,
+      'businessName'  : business,
     };
   }
 

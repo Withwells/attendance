@@ -16,16 +16,16 @@ class SetupWizardScreen extends StatefulWidget {
 }
 
 class _SetupWizardScreenState extends State<SetupWizardScreen> {
-  final _businessNameC = TextEditingController();
-  final _adminNameC    = TextEditingController();
+  final _businessC  = TextEditingController();
+  final _adminNameC = TextEditingController();
   late final TextEditingController _adminEmailC;
 
   bool _requirePhoto    = false;
   bool _requireLocation = false;
   bool _enableTaskEntry = false;
 
-  bool   _isLoading = false;
-  String? _error;
+  bool   _busy  = false;
+  String? _err;
 
   @override
   void initState() {
@@ -35,32 +35,29 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
 
   @override
   void dispose() {
-    _businessNameC.dispose();
+    _businessC.dispose();
     _adminNameC.dispose();
     _adminEmailC.dispose();
     super.dispose();
   }
 
-  Future<void> _finishSetup() async {
-    final biz   = _businessNameC.text.trim();
+  Future<void> _finish() async {
+    final biz   = _businessC.text.trim();
     final admin = _adminNameC.text.trim();
-    final email = _adminEmailC.text.trim();
+    final mail  = _adminEmailC.text.trim();
 
-    if (biz.isEmpty || admin.isEmpty || email.isEmpty) {
-      setState(() => _error = 'Please fill all fields');
+    if ([biz, admin, mail].any((e) => e.isEmpty)) {
+      setState(() => _err = 'Please fill all fields');
       return;
     }
 
-    setState(() { _isLoading = true; _error = null; });
-
+    setState(() { _busy = true; _err = null; });
     try {
-      final ids = await widget.sheetsService.createFolderAndSheet(
-        biz, admin,
-      );
+      final ids = await widget.sheetsService.createFolderAndSheet(biz, admin);
 
       await widget.sheetsService.initializeSheet(
         ids['spreadsheetId']!,
-        email,
+        mail,
         admin,
         {
           'requirePhoto'    : _requirePhoto,
@@ -70,81 +67,46 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
       );
 
       if (context.mounted) {
-        Navigator.pop(context, {
-          'spreadsheetId': ids['spreadsheetId'],
+        Navigator.pop(context, <String, String>{
+          'spreadsheetId': ids['spreadsheetId']!,
           'businessName' : biz,
         });
       }
     } catch (e) {
       setState(() {
-        _error     = 'Setup error: $e';
-        _isLoading = false;
+        _err  = 'Setup error: $e';
+        _busy = false;
       });
     }
   }
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext ctx) {
     return Scaffold(
       appBar: AppBar(title: const Text('Setup Wizard')),
       body: Padding(
         padding: const EdgeInsets.all(24),
-        child: Column(
+        child: ListView(
           children: [
-            TextField(
-              controller: _businessNameC,
-              decoration: const InputDecoration(
-                labelText: 'Business Name',
-                border: OutlineInputBorder(),
-              ),
-              enabled: !_isLoading,
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _adminNameC,
-              decoration: const InputDecoration(
-                labelText: 'Admin Name',
-                border: OutlineInputBorder(),
-              ),
-              enabled: !_isLoading,
-            ),
-            const SizedBox(height: 16),
-            TextField(
-              controller: _adminEmailC,
-              decoration: const InputDecoration(
-                labelText: 'Admin Email',
-                border: OutlineInputBorder(),
-              ),
-              enabled: !_isLoading,
-            ),
+            _field(_businessC, 'Business Name'),
+            _gap,
+            _field(_adminNameC, 'Admin Name'),
+            _gap,
+            _field(_adminEmailC, 'Admin Email',
+                keyboard: TextInputType.emailAddress),
+            _gap,
+            _toggle('Require Photo',    _requirePhoto,    (v) => setState(() => _requirePhoto    = v)),
+            _toggle('Require Location', _requireLocation, (v) => setState(() => _requireLocation = v)),
+            _toggle('Enable Task Entry',_enableTaskEntry, (v) => setState(() => _enableTaskEntry = v)),
             const SizedBox(height: 20),
-            SwitchListTile(
-              title: const Text('Require Photo'),
-              value: _requirePhoto,
-              onChanged: _isLoading ? null : (v) => setState(() => _requirePhoto = v),
-            ),
-            SwitchListTile(
-              title: const Text('Require Location'),
-              value: _requireLocation,
-              onChanged: _isLoading ? null : (v) => setState(() => _requireLocation = v),
-            ),
-            SwitchListTile(
-              title: const Text('Enable Task Entry'),
-              value: _enableTaskEntry,
-              onChanged: _isLoading ? null : (v) => setState(() => _enableTaskEntry = v),
-            ),
-            const SizedBox(height: 24),
-            if (_error != null) ...[
-              Text(_error!, style: const TextStyle(color: Colors.red)),
-              const SizedBox(height: 12),
+            if (_err != null) ...[
+              Text(_err!, style: const TextStyle(color: Colors.red)),
+              _gap,
             ],
             ElevatedButton(
-              onPressed: _isLoading ? null : _finishSetup,
-              child: _isLoading
-                  ? const SizedBox(
-                width: 24, height: 24,
-                child: CircularProgressIndicator(strokeWidth: 2),
-              )
+              onPressed: _busy ? null : _finish,
+              child: _busy
+                  ? const CircularProgressIndicator(strokeWidth: 2)
                   : const Text('Finish Setup'),
             ),
           ],
@@ -152,4 +114,18 @@ class _SetupWizardScreenState extends State<SetupWizardScreen> {
       ),
     );
   }
+
+  /* -- helpers -- */
+  final _gap = const SizedBox(height: 16);
+
+  Widget _field(TextEditingController c, String label, {TextInputType? keyboard}) =>
+      TextField(
+        controller: c,
+        keyboardType: keyboard,
+        decoration: InputDecoration(labelText: label, border: const OutlineInputBorder()),
+        enabled: !_busy,
+      );
+
+  Widget _toggle(String t, bool v, ValueChanged<bool> onChanged) =>
+      SwitchListTile(title: Text(t), value: v, onChanged: _busy ? null : onChanged);
 }
